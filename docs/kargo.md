@@ -14,12 +14,12 @@ executed (no Kargo object was applied, no promotion was run).
 - Configuration/documentation only: no `Project` / `Warehouse` /
   `Stage`, no registry URL, and no credentials of any kind exist in
   this repository.
-- The infrastructure repository carries the placeholders
-  `<LOCAL_REGISTRY_URL>`, `<HELLO_DEVOPS_GIT_REPOSITORY_URL>`, and
-  `<HELLO_DEVOPS_GIT_REPOSITORY_BRANCH>` (in `warehouse.yaml`,
-  `stage-dev.yaml`, `stage-staging.yaml`). They are replaced **there**,
-  never here — this repository invents no real registry address and no
-  real clone URL.
+- The infrastructure repository still carries `<LOCAL_REGISTRY_URL>`
+  (in `warehouse.yaml`, `stage-dev.yaml`, `stage-staging.yaml`); its
+  repository URL/branch are already resolved
+  (`https://github.com/CharbelKallas/hello-devops.git`, `master`).
+  Replacements always happen **there**, never here — this repository
+  invents no real registry address.
 
 ## The promotion flow (all Kargo objects defined in the infra repo)
 
@@ -40,8 +40,8 @@ Argo CD (infra repo)       syncs dev/ and staging/ into K3s
 Each Stage runs four steps on its promotion:
 
 1. `git-clone` — checks out this repository
-   (`<HELLO_DEVOPS_GIT_REPOSITORY_URL`, branch
-   `<HELLO_DEVOPS_GIT_REPOSITORY_BRANCH>`);
+   (`https://github.com/CharbelKallas/hello-devops.git`, branch
+   `master`);
 2. `kustomize-set-image` — rewrites the image digest in `dev/`
    (stage `dev`) or `staging/` (stage `staging`);
 3. `git-commit` — commits that single overlay change;

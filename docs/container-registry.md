@@ -33,7 +33,7 @@ contract:
    discover new images. (Individual commits are identified by the
    digest, not by the tag.)
 
-The workflow also pushes only on `push` to `main` (never from pull
+The workflow also pushes only on `push` to `master` (never from pull
 requests), so a PR can never publish an image.
 
 ## Configuring the registry in GitHub Actions (later)

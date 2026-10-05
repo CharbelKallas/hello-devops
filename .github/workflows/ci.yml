@@ -1,6 +1,6 @@
 # CI for hello-devops — build/test only, NO deployment.
 #
-#   - runs on pull requests and on pushes to main (path-filtered)
+#   - runs on pull requests and on pushes to master (path-filtered)
 #   - "test": install → static module check → automated tests
 #   - "image": builds the image and pushes
 #     <LOCAL_REGISTRY_URL>/hello-devops:latest — the tag the Kargo
@@ -24,7 +24,7 @@ name: CI
 on:
   push:
     branches:
-      - main
+      - master
     paths:
       - 'src/**'
       - 'test/**'
@@ -35,7 +35,7 @@ on:
       - '.github/workflows/ci.yml'
   pull_request:
     branches:
-      - main
+      - master
     paths:
       - 'src/**'
       - 'test/**'
@@ -80,7 +80,7 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Push only for pushes to main (never from pull requests), and only
+    # Push only for pushes to master (never from pull requests), and only
     # once the registry is configured as a repository variable — until
     # then this job is skipped and CI still validates the code.
     if: github.event_name == 'push' && vars.LOCAL_REGISTRY_URL != ''

@@ -14,10 +14,11 @@ result. Nothing here has been executed (`kubectl` was never run).
 - Configuration/documentation only: no Argo CD `Application`, no
   Argo CD Helm values, no cluster credentials, and no Argo CD config of
   any kind exist in this repository.
-- The infrastructure repository still carries the placeholders
-  `<HELLO_DEVOPS_GIT_REPOSITORY_URL>` and
-  `<HELLO_DEVOPS_GIT_REPOSITORY_BRANCH>`; they are replaced there (with
-  this repository's clone URL and branch, commonly `main`), never here.
+- The infrastructure repository's repository/branch placeholders are
+  already replaced with this repository's values
+  (`https://github.com/CharbelKallas/hello-devops.git`, branch
+  `master`) — replacements always happen there, never here. Only
+  `<LOCAL_REGISTRY_URL>` is still outstanding, in both repositories.
 
 ## The two Applications (defined in the infrastructure repo)
 
@@ -26,9 +27,10 @@ result. Nothing here has been executed (`kubectl` was never run).
 | `hello-devops-dev` | `dev` (repository root) | `hello-devops-dev` | automated, prune + selfHeal, `CreateNamespace=true` |
 | `hello-devops-staging` | `staging` (repository root) | `hello-devops-staging` | automated, prune + selfHeal, `CreateNamespace=true` |
 
-Both point at this repository through the placeholders
-`<HELLO_DEVOPS_GIT_REPOSITORY_URL>` (clone URL) and
-`<HELLO_DEVOPS_GIT_REPOSITORY_BRANCH>` (branch, commonly `main`).
+Both point at this repository: `repoURL`
+`https://github.com/CharbelKallas/hello-devops.git` and
+`targetRevision: master` (the branch holding the root `dev/` and
+`staging/` paths).
 
 ## What this repository must guarantee
 

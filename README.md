@@ -15,45 +15,45 @@ pushed, executed, or deployed (see [Later Milestones](#later-milestones-m2)).
 ## End-to-End Architecture
 
 ```text
-┌── hello-devops (THIS repository) ─────────────────────────────────────────────┐
-│ src/ Express API + test/ fakes     Dockerfile (node:22-alpine, non-root)      │
-│ base/ shared manifests             dev/ + staging/ Kustomize overlays         │
-│ .github/workflows/ci.yml           docs/ registry + Argo CD + Kargo notes     │
+┌── hello-devops (THIS repository) ───────────────────────────────────────────── ┐
+│ src/ Express API + test/ fakes     Dockerfile (node:22-alpine, non-root)       │
+│ base/ shared manifests             dev/ + staging/ Kustomize overlays          │
+│ .github/workflows/ci.yml           docs/ registry + Argo CD + Kargo notes      │
 └──────────────┬─────────────────────────────────────────────────────────────────┘
                │  git push / pull request
                ▼
 ┌── GitHub Actions CI (configured here, NOT executed yet) ───────────────────────┐
-│ test:  npm install → npm run check → npm test      (PRs + pushes to main)     │
-│ image: docker build → push <LOCAL_REGISTRY_URL>/hello-devops:latest           │
-│        (push to main only, path-filtered — Kargo commits in                   │
-│         dev/ staging/ never retrigger it; skipped until the                   │
-│         LOCAL_REGISTRY_URL repository variable exists)                        │
+│ test:  npm install → npm run check → npm test      (PRs + pushes to master)    │
+│ image: docker build → push <LOCAL_REGISTRY_URL>/hello-devops:latest            │
+│        (push to master only, path-filtered — Kargo commits in                  │
+│         dev/ staging/ never retrigger it; skipped until the                    │
+│         LOCAL_REGISTRY_URL repository variable exists)                         │
 └──────────────┬─────────────────────────────────────────────────────────────────┘
                │  push :latest
                ▼
-┌── Local container registry (infrastructure-owned; never started here) ────────┐
+┌── Local container registry (infrastructure-owned; never started here) ──────── ┐
 └──────────────┬─────────────────────────────────────────────────────────────────┘
                │  new digest discovered
                ▼
-┌── local-server (INFRASTRUCTURE repository — configuration only) ──────────────┐
-│ Kargo     Warehouse → Freight → Stage dev → Stage staging                     │
-│           promotion = git-clone → kustomize-set-image → commit → push         │
-│           └── writes the promoted digest into THIS repo's dev/ and staging/   │
-│ Argo CD   Applications hello-devops-dev / -staging (auto-sync, prune,         │
-│           selfHeal), source paths dev/ and staging/ at the repo root          │
-│           └── renders those overlays and applies them to the cluster          │
+┌── local-server (INFRASTRUCTURE repository — configuration only) ────────────── ┐
+│ Kargo     Warehouse → Freight → Stage dev → Stage staging                      │
+│           promotion = git-clone → kustomize-set-image → commit → push          │
+│           └── writes the promoted digest into THIS repo's dev/ and staging/    │
+│ Argo CD   Applications hello-devops-dev / -staging (auto-sync, prune,          │
+│           selfHeal), source paths dev/ and staging/ at the repo root           │
+│           └── renders those overlays and applies them to the cluster           │
 └──────────────┬─────────────────────────────────────────────────────────────────┘
                ▼
-┌── K3s cluster ────────────────────────────────────────────────────────────────┐
-│ namespace hello-devops-dev          namespace hello-devops-staging            │
-│   Deployment + Service (ClusterIP)   Deployment + Service                    │
-│   liveness  → /health  (process)     readiness → /ready (all 3 databases)    │
-│                     │                        │                               │
-│                     └────────────┬───────────┘                               │
-│                                  ▼                                            │
-│ namespace databases:   postgres.databases:5432 (db lab, trust)               │
-│                        mongodb.databases:27017   redis.databases:6379        │
-└───────────────────────────────────────────────────────────────────────────────┘
+┌── K3s cluster ──────────────────────────────────────────────────────────────── ┐
+│ namespace hello-devops-dev          namespace hello-devops-staging             │
+│   Deployment + Service (ClusterIP)   Deployment + Service                      │
+│   liveness  → /health  (process)     readiness → /ready (all 3 databases)      │
+│                     │                        │                                 │
+│                     └────────────┬───────────┘                                 │
+│                                  ▼                                             │
+│ namespace databases:   postgres.databases:5432 (db lab, trust)                 │
+│                        mongodb.databases:27017   redis.databases:6379          │
+└─────────────────────────────────────────────────────────────────────────────── ┘
 ```
 
 Ownership in one line each: **this repo** = how the application is built
@@ -245,12 +245,12 @@ Key properties:
 ## Continuous Integration
 
 [.github/workflows/ci.yml](.github/workflows/ci.yml) runs on **pull
-requests** and on **pushes to `main`** (path-filtered):
+requests** and on **pushes to `master`** (path-filtered):
 
 | Job | When | What |
 |-----|------|------|
 | `test` | always (on triggered runs) | `npm install` → `npm run check` (static module import) → `npm test` |
-| `image` | only `push` to `main`, and only once `LOCAL_REGISTRY_URL` is set as a repository variable | `docker build` → optional registry login → `docker push …/hello-devops:latest` |
+| `image` | only `push` to `master`, and only once `LOCAL_REGISTRY_URL` is set as a repository variable | `docker build` → optional registry login → `docker push …/hello-devops:latest` |
 
 Properties worth knowing:
 
@@ -301,7 +301,7 @@ hello-devops/
 ├── .nvmrc                  # Node.js version (22)
 ├── Dockerfile              # two-stage production image (node:22-alpine)
 ├── .dockerignore           # keeps the build context lean
-├── .github/workflows/ci.yml # CI: test always, push :latest on main
+├── .github/workflows/ci.yml # CI: test always, push :latest on master
 ├── base/                   # shared K8s manifests (see above)
 ├── dev/                    # Kustomize overlay → namespace hello-devops-dev
 ├── staging/                # Kustomize overlay → namespace hello-devops-staging
@@ -339,18 +339,22 @@ Deliberately not done in this milestone:
 1. **`package-lock.json`** — generate (`npm install` on a machine with
    Node) and commit it, then switch CI and the Dockerfile to
    `npm ci` and enable the npm cache in Actions (reproducible builds).
-2. **Replace the placeholders in both repositories, together:**
-   `<LOCAL_REGISTRY_URL>`, `<HELLO_DEVOPS_GIT_REPOSITORY_URL>`,
-   `<HELLO_DEVOPS_GIT_REPOSITORY_BRANCH>` — in `base/deployment.yaml`,
-   `dev/kustomization.yaml`, `staging/kustomization.yaml` here; the
-   Argo CD Applications and Kargo objects in `local-server`.
+2. **Replace the remaining placeholder `<LOCAL_REGISTRY_URL>` in both
+   repositories, together** — in `base/deployment.yaml`,
+   `dev/kustomization.yaml`, `staging/kustomization.yaml` here, and in
+   `local-server`'s `warehouse.yaml`, `stage-dev.yaml`,
+   `stage-staging.yaml`. (The repository URL and branch are already
+   resolved everywhere:
+   `https://github.com/CharbelKallas/hello-devops.git`, branch
+   `master`.)
 3. **Configure GitHub Actions** (repository Settings → Secrets and
    variables): `LOCAL_REGISTRY_URL` (+ optional
    `LOCAL_REGISTRY_USERNAME` / `LOCAL_REGISTRY_PASSWORD`) and decide
    the reachability/runner question in
    [docs/container-registry.md](docs/container-registry.md).
-4. **Push this repository** to GitHub (`main`) — first CI run; until
-   step 2 is done the `image` job stays skipped by design.
+4. **Push these changes to `master`** — the branch triggers in `ci.yml`
+   now match the default branch, so this starts the first CI run; until
+   steps 2–3 are done the `image` job stays skipped by design.
 5. **Infrastructure side:** start the local registry, apply the Kargo
    and Argo CD manifests, create `hello-devops-secret` only if
    PostgreSQL ever needs a password (see `base/secret.example.yaml`).
