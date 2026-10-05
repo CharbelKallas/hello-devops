@@ -1,0 +1,35 @@
+# Shared application configuration — injected into the container as
+# environment variables (envFrom). NOTHING sensitive lives here: the
+# password belongs in the gitignored Secret (see secret.example.yaml).
+#
+# Hostnames are fully-qualified so they resolve from the application
+# namespaces (hello-devops-dev / hello-devops-staging) into the shared
+# `databases` namespace maintained by the infrastructure repository.
+# This repository does NOT create any database.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hello-devops-config
+  labels:
+    app.kubernetes.io/name: hello-devops
+    app.kubernetes.io/part-of: hello-devops
+data:
+  # Application
+  PORT: "3000"
+  # VERSION is intentionally absent: the app defaults to the version in
+  # package.json, which is baked into the image.
+
+  # PostgreSQL (relational data: users) — lab runs with trust auth,
+  # so no password is required.
+  PGHOST: postgres.databases.svc.cluster.local
+  PGPORT: "5432"
+  PGDATABASE: lab
+  PGUSER: postgres
+  # PGPASSWORD is deliberately NOT set here → Secret (never committed).
+
+  # MongoDB (document data: documents) — no auth in the lab.
+  MONGODB_URI: mongodb://mongodb.databases.svc.cluster.local:27017/hello-devops
+
+  # Redis (cache) — no password in the lab.
+  REDIS_HOST: redis.databases.svc.cluster.local
+  REDIS_PORT: "6379"

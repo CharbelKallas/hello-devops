@@ -1,0 +1,109 @@
+# CI for hello-devops — build/test only, NO deployment.
+#
+#   - runs on pull requests and on pushes to main (path-filtered)
+#   - "test": install → static module check → automated tests
+#   - "image": builds the image and pushes
+#     <LOCAL_REGISTRY_URL>/hello-devops:latest — the tag the Kargo
+#     Warehouse in the infrastructure repository tracks
+#
+# Deliberately absent (see docs/container-registry.md and the README):
+#   - no deploy step: Argo CD + Kargo own deployment/promotion, and
+#     both are configured in the infrastructure repository
+#   - no AWS / ECR / LocalStack / Docker Hub / any cloud registry
+#   - the registry URL comes from a repository VARIABLE
+#     (vars.LOCAL_REGISTRY_URL), credentials from a SECRET — nothing
+#     host-specific or sensitive is committed
+#
+# Path filter: only code, tests, and image inputs trigger the workflow.
+# Kargo's promotion commits touch dev/ and staging/ only, so they never
+# retrigger a build (which would otherwise loop).
+#
+# Status: configuration only — this workflow has NOT been executed.
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'test/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'test/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - '.github/workflows/ci.yml'
+
+# Least privilege: the workflow only reads the repository.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+        # No npm cache here: caching needs package-lock.json, which does
+        # not exist yet (see the README follow-up list).
+
+      - name: Install dependencies
+        # npm install rather than npm ci for the same reason (no lockfile).
+        run: npm install
+
+      - name: Static module check
+        run: npm run check
+
+      - name: Run tests
+        run: npm test
+
+  image:
+    name: Build and push image
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Push only for pushes to main (never from pull requests), and only
+    # once the registry is configured as a repository variable — until
+    # then this job is skipped and CI still validates the code.
+    if: github.event_name == 'push' && vars.LOCAL_REGISTRY_URL != ''
+    env:
+      IMAGE: ${{ vars.LOCAL_REGISTRY_URL }}/hello-devops:latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build --pull -t "$IMAGE" .
+
+      # Optional: only needed if the local registry requires auth.
+      - name: Log in to the registry
+        if: vars.LOCAL_REGISTRY_USERNAME != ''
+        run: |
+          echo "$LOCAL_REGISTRY_PASSWORD" | docker login \
+            "$LOCAL_REGISTRY_URL" --username "$LOCAL_REGISTRY_USERNAME" \
+            --password-stdin
+        env:
+          LOCAL_REGISTRY_URL: ${{ vars.LOCAL_REGISTRY_URL }}
+          LOCAL_REGISTRY_USERNAME: ${{ vars.LOCAL_REGISTRY_USERNAME }}
+          LOCAL_REGISTRY_PASSWORD: ${{ secrets.LOCAL_REGISTRY_PASSWORD }}
+
+      - name: Push :latest (tracked by the Kargo Warehouse)
+        run: docker push "$IMAGE"

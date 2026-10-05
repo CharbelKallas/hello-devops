@@ -1,0 +1,29 @@
+# VCS / CI — never needed inside the image or the build context
+.git
+.github
+.gitignore
+
+# Dependencies — the image installs its own
+node_modules
+npm-debug.log
+
+# Local environment files (may contain credentials)
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Not part of the runtime image
+test
+coverage
+docs
+scripts
+base
+dev
+staging
+.nvmrc
+README.md
+Dockerfile
+.dockerignore
+*.log
+.DS_Store

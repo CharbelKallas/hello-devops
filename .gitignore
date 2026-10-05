@@ -1,0 +1,35 @@
+# macOS
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment files (may contain credentials — never commit)
+.env
+.env.local
+.env.*.local
+
+# Real Kubernetes Secrets — only base/secret.example.yaml is committed
+secret.yaml
+secrets/
+*.pem
+*.key
+
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test / coverage output
+coverage/
+
+# Build artifacts
+dist/
+build/
+tmp/

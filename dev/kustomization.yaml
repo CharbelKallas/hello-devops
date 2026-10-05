@@ -1,0 +1,23 @@
+# Overlay "dev".
+#
+# CONTRACT (cross-repository):
+#   - Argo CD Application "hello-devops-dev" (defined in the
+#     infrastructure repository) renders THIS directory: source path
+#     "dev" at the repository root, destination namespace
+#     "hello-devops-dev". Keep `namespace` below in sync with it.
+#   - Kargo's promotion into the dev Stage runs kustomize-set-image on
+#     ./dev and writes the promoted image digest into `images` below.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: hello-devops-dev
+
+resources:
+  - ../base
+
+# The image repository must match base/deployment.yaml exactly —
+# Kargo matches on it when rewriting the digest; CI has pushed
+# `latest` to the local registry by then.
+images:
+  - name: <LOCAL_REGISTRY_URL>/hello-devops
+    newTag: latest

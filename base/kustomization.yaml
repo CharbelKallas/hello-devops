@@ -1,0 +1,12 @@
+# Shared manifests for every environment (the Kustomize "base").
+#
+# NOTE: base/secret.example.yaml is intentionally NOT in `resources` —
+# it is committed documentation only; real Secrets are created manually
+# and never enter GitOps (see the file's header).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - configmap.yaml
+  - deployment.yaml
+  - service.yaml
