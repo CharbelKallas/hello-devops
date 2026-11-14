@@ -39,11 +39,11 @@ function shutdown(signal) {
     process.exit(1);
   }, SHUTDOWN_TIMEOUT_MS).unref();
 
+  // server.close() also closes idle keep-alive connections (Node 19+).
   server.close(async () => {
     await services.close();
     process.exit(0);
   });
-  server.closeIdleConnections();
 }
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));

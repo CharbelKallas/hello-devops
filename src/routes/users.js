@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { withService } from '../http.js';
+import { BadRequestError, NotFoundError } from '../errors.js';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_EMAIL_LENGTH = 254; // RFC 5321 limit
@@ -10,8 +11,8 @@ const MAX_USER_ID = 2_147_483_647;
 
 /**
  * /users — relational data stored in PostgreSQL.
- * Validation failures answer 400 inline; dependency failures fall
- * through withService() as 503 service_unavailable.
+ * Validation failures are thrown as 400/404 errors and dependency
+ * failures as 503; withService() renders both.
  */
 export function createUsersRouter(users) {
   const router = Router();
@@ -21,9 +22,7 @@ export function createUsersRouter(users) {
     withService('postgresql', async (req, res) => {
       const { name, email } = req.body ?? {};
       if (typeof name !== 'string' || name.trim() === '' || name.includes(NUL)) {
-        return res
-          .status(400)
-          .json({ error: 'bad_request', message: 'name is required' });
+        throw new BadRequestError('name is required');
       }
       if (
         typeof email !== 'string' ||
@@ -31,9 +30,7 @@ export function createUsersRouter(users) {
         email.includes(NUL) ||
         !EMAIL_PATTERN.test(email.trim())
       ) {
-        return res
-          .status(400)
-          .json({ error: 'bad_request', message: 'a valid email is required' });
+        throw new BadRequestError('a valid email is required');
       }
       const user = await users.create({
         name: name.trim(),
@@ -49,18 +46,11 @@ export function createUsersRouter(users) {
       // Plain decimal digits only: Number() would also accept
       // "1e3", "0x10" or " 7 ".
       if (!/^[1-9][0-9]*$/.test(req.params.id)) {
-        return res.status(400).json({
-          error: 'bad_request',
-          message: 'id must be a positive integer',
-        });
+        throw new BadRequestError('id must be a positive integer');
       }
       const id = Number(req.params.id);
       const user = id <= MAX_USER_ID ? await users.get(id) : null;
-      if (!user) {
-        return res
-          .status(404)
-          .json({ error: 'not_found', message: `user ${id} not found` });
-      }
+      if (!user) throw new NotFoundError(`user ${req.params.id} not found`);
       return res.status(200).json(user);
     })
   );

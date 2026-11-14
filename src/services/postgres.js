@@ -9,11 +9,16 @@ const SERVICE = 'postgresql';
 // violations (23) and syntax/undefined-object errors (42). These are
 // bugs and must surface as 500s, not as a database outage.
 const BUG_SQLSTATE_CLASSES = new Set(['22', '23', '42']);
+// ...except insufficient_privilege: missing grants are a database
+// configuration problem, reported as the database being unavailable.
+const INSUFFICIENT_PRIVILEGE = '42501';
+const UNDEFINED_TABLE = '42P01';
 
 function isBug(err) {
   return (
     typeof err.code === 'string' &&
     /^[0-9A-Z]{5}$/.test(err.code) &&
+    err.code !== INSUFFICIENT_PRIVILEGE &&
     BUG_SQLSTATE_CLASSES.has(err.code.slice(0, 2))
   );
 }
@@ -32,16 +37,28 @@ const CREATE_USERS_TABLE = `
  *
  * The Pool does not connect eagerly — if PostgreSQL is down, queries
  * fail fast (connectionTimeoutMillis / query_timeout) and the route
- * answers 503. The schema is ensured lazily once per process; a failed
- * attempt is forgotten so the next request retries.
+ * answers 503. The schema is ensured lazily and remembered; a failed
+ * attempt is forgotten so the next request retries, and if the table
+ * later disappears (e.g. failover to a freshly restored database) it is
+ * recreated on the next query.
  */
-export function createPostgresUsers({ host, port, database, user, password }) {
+export function createPostgresUsers({
+  host,
+  port,
+  database,
+  user,
+  password,
+  applicationName = 'hello-devops',
+}) {
   const pool = new Pool({
     host,
     port,
     database,
     user,
     password,
+    // Shown in pg_stat_activity, so operators can tell these
+    // connections apart.
+    application_name: applicationName,
     max: 5,
     connectionTimeoutMillis: 3000,
     idleTimeoutMillis: 10_000,
@@ -93,6 +110,20 @@ export function createPostgresUsers({ host, port, database, user, password }) {
     return schema;
   }
 
+  // Queries against the users table. If the table vanished after the
+  // schema was ensured, forget that, recreate it and retry once.
+  async function usersQuery(text, params) {
+    await ensureSchema();
+    try {
+      return await query(text, params);
+    } catch (err) {
+      if (err.code !== UNDEFINED_TABLE) throw err;
+      schema = null;
+      await ensureSchema();
+      return query(text, params);
+    }
+  }
+
   function toApi(row) {
     return {
       id: row.id,
@@ -104,8 +135,7 @@ export function createPostgresUsers({ host, port, database, user, password }) {
 
   return {
     async create({ name, email }) {
-      await ensureSchema();
-      const { rows } = await query(
+      const { rows } = await usersQuery(
         'INSERT INTO users (name, email) VALUES ($1, $2) ' +
           'RETURNING id, name, email, created_at',
         [name, email]
@@ -114,8 +144,7 @@ export function createPostgresUsers({ host, port, database, user, password }) {
     },
 
     async get(id) {
-      await ensureSchema();
-      const { rows } = await query(
+      const { rows } = await usersQuery(
         'SELECT id, name, email, created_at FROM users WHERE id = $1',
         [id]
       );

@@ -100,27 +100,33 @@ test('cache: set, get, namespaced storage, TTL expiry', async () => {
 });
 
 test('regression: PostgreSQL killing idle connections does not crash the app', async () => {
-  // Leave an idle client in the pool...
-  assert.equal((await request(app).get('/users/1')).status < 500, true);
-
-  // ...then terminate every other connection to the database from the
-  // server side, as a PostgreSQL restart or failover does. Before the
-  // fix, the pool's unhandled 'error' event crashed the process here.
+  // A service whose connections carry a unique application_name, so
+  // only ITS connections are terminated — never anyone else's, even if
+  // PG* points at a shared database.
+  const applicationName = `hello-devops-test-${run}`;
+  const users = createPostgresUsers({ ...config.postgres, applicationName });
   const admin = new pg.Client(config.postgres);
-  await admin.connect();
   try {
-    await admin.query(
-      'SELECT pg_terminate_backend(pid) FROM pg_stat_activity ' +
-        'WHERE datname = current_database() AND pid <> pg_backend_pid()'
+    // Leave an idle client in the pool...
+    assert.equal(await users.ping(), true);
+
+    // ...then terminate it from the server side, as a PostgreSQL
+    // restart or failover does. Before the fix, the pool's unhandled
+    // 'error' event crashed the process here.
+    await admin.connect();
+    const { rowCount } = await admin.query(
+      'SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = $1',
+      [applicationName]
     );
+    assert.ok(rowCount >= 1, 'expected an idle connection to terminate');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // Still alive, and the pool reconnects transparently.
+    assert.equal(await users.ping(), true);
   } finally {
     await admin.end();
+    await users.close();
   }
-  await new Promise((resolve) => setTimeout(resolve, 200));
-
-  // Still alive, and the pool reconnects transparently.
-  const res = await request(app).get('/ready');
-  assert.equal(res.status, 200, JSON.stringify(res.body));
 });
 
 test('regression: MongoDB unreachable at startup recovers once it is back', async () => {
@@ -183,6 +189,53 @@ test('replicas creating the schema at the same time do not fail', async () => {
   } finally {
     await Promise.all(replicas.map((users) => users.close()));
     await admin.query(`DROP DATABASE ${database}`);
+    await admin.end();
+  }
+});
+
+test('a users table that disappears is recreated instead of failing forever', async () => {
+  const database = `hd_drop_${run.replace(/-/g, '')}`;
+  const admin = new pg.Client(config.postgres);
+  await admin.connect();
+  await admin.query(`CREATE DATABASE ${database}`);
+  const users = createPostgresUsers({ ...config.postgres, database });
+  const inDb = new pg.Client({ ...config.postgres, database });
+  try {
+    assert.equal(await users.get(1), null); // schema ensured and remembered
+    await inDb.connect();
+    await inDb.query('DROP TABLE users'); // e.g. failover to a restored database
+    assert.equal(await users.get(1), null);
+    const created = await users.create({ name: 'Back', email: `back-${run}@example.com` });
+    assert.equal(created.name, 'Back');
+  } finally {
+    await inDb.end();
+    await users.close();
+    await admin.query(`DROP DATABASE ${database}`);
+    await admin.end();
+  }
+});
+
+test('missing database privileges are reported as unavailable (503), not as a bug', async () => {
+  const database = `hd_priv_${run.replace(/-/g, '')}`;
+  const role = `hd_noperm_${run.replace(/-/g, '')}`;
+  const admin = new pg.Client(config.postgres);
+  await admin.connect();
+  await admin.query(`CREATE DATABASE ${database}`);
+  await admin.query(`CREATE ROLE ${role} LOGIN`);
+  const owner = createPostgresUsers({ ...config.postgres, database });
+  const limited = createPostgresUsers({ ...config.postgres, database, user: role, password: '' });
+  try {
+    assert.equal(await owner.get(1), null); // table exists, owned by the admin user
+    await assert.rejects(limited.get(1), (err) => {
+      assert.equal(err.statusCode, 503);
+      assert.equal(err.cause.code, '42501');
+      return true;
+    });
+  } finally {
+    await owner.close();
+    await limited.close();
+    await admin.query(`DROP DATABASE ${database}`);
+    await admin.query(`DROP ROLE ${role}`);
     await admin.end();
   }
 });
