@@ -60,3 +60,18 @@ test('loadConfig honours database environment variables', () => {
 test('loadConfig rejects an invalid PGPORT', () => {
   assert.throws(() => loadConfig({ PGPORT: 'nope' }), /PGPORT must be an integer/);
 });
+
+test('loadConfig leaves API_KEY unset by default', () => {
+  assert.equal(loadConfig({}).apiKey, null);
+  assert.equal(loadConfig({ API_KEY: '' }).apiKey, null);
+});
+
+test('loadConfig accepts a strong API_KEY and rejects a short one', () => {
+  assert.equal(loadConfig({ API_KEY: 'x'.repeat(16) }).apiKey, 'x'.repeat(16));
+  assert.throws(() => loadConfig({ API_KEY: 'short' }), /API_KEY must be at least 16/);
+});
+
+test('loadConfig trims API_KEY (Secrets created from files end in a newline)', () => {
+  assert.equal(loadConfig({ API_KEY: `${'k'.repeat(20)}\n` }).apiKey, 'k'.repeat(20));
+  assert.equal(loadConfig({ API_KEY: '   \n' }).apiKey, null);
+});

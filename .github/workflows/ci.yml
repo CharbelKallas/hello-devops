@@ -1,7 +1,9 @@
 # CI for hello-devops — build/test only, NO deployment.
 #
 #   - runs on pull requests and on pushes to master (path-filtered)
-#   - "test": install → static module check → automated tests
+#   - "test": install → static module check → unit tests
+#   - "integration": the app against real PostgreSQL, MongoDB and Redis
+#     (GitHub Actions service containers)
 #   - "image": builds the image and pushes
 #     <LOCAL_REGISTRY_URL>/hello-devops:latest — the tag the Kargo
 #     Warehouse in the infrastructure repository tracks
@@ -17,8 +19,6 @@
 # Path filter: only code, tests, and image inputs trigger the workflow.
 # Kargo's promotion commits touch dev/ and staging/ only, so they never
 # retrigger a build (which would otherwise loop).
-#
-# Status: configuration only — this workflow has NOT been executed.
 name: CI
 
 on:
@@ -30,6 +30,7 @@ on:
       - 'test/**'
       - 'scripts/**'
       - 'package.json'
+      - 'package-lock.json'
       - 'Dockerfile'
       - '.dockerignore'
       - '.github/workflows/ci.yml'
@@ -41,6 +42,7 @@ on:
       - 'test/**'
       - 'scripts/**'
       - 'package.json'
+      - 'package-lock.json'
       - 'Dockerfile'
       - '.dockerignore'
       - '.github/workflows/ci.yml'
@@ -62,22 +64,66 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
-        # No npm cache here: caching needs package-lock.json, which does
-        # not exist yet (see the README follow-up list).
+          cache: npm
 
-      - name: Install dependencies
-        # npm install rather than npm ci for the same reason (no lockfile).
-        run: npm install
+      - name: Install dependencies (exactly as locked)
+        run: npm ci
 
       - name: Static module check
         run: npm run check
 
-      - name: Run tests
+      - name: Run unit tests
         run: npm test
+
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: lab
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d lab"
+          --health-interval 2s --health-timeout 2s --health-retries 30
+      mongodb:
+        image: mongo:8
+        ports: ['27017:27017']
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1}).ok'"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s --health-timeout 2s --health-retries 30
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies (exactly as locked)
+        run: npm ci
+
+      - name: Run integration tests
+        run: npm run test:integration
+        env:
+          PGHOST: 127.0.0.1
+          MONGODB_URI: mongodb://127.0.0.1:27017/hello-devops
+          REDIS_HOST: 127.0.0.1
 
   image:
     name: Build and push image
-    needs: test
+    needs: [test, integration]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Push only for pushes to master (never from pull requests), and only

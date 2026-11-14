@@ -1,7 +1,31 @@
 import express from 'express';
+import { requireApiKey } from './auth.js';
 import { createUsersRouter } from './routes/users.js';
 import { createDocumentsRouter } from './routes/documents.js';
 import { createCacheRouter } from './routes/cache.js';
+
+// Body-parser errors carry a 4xx `status`; map them to stable codes.
+const BODY_ERROR_CODES = {
+  'entity.parse.failed': ['invalid_json', 'request body is not valid JSON'],
+  'entity.too.large': ['payload_too_large', 'request body is too large'],
+  'charset.unsupported': ['unsupported_media_type', 'unsupported charset'],
+  'encoding.unsupported': ['unsupported_media_type', 'unsupported content encoding'],
+};
+
+/**
+ * Security headers for a JSON-only API: nothing here should ever be
+ * rendered as HTML, framed, sniffed, or cached by intermediaries.
+ */
+function securityHeaders(req, res, next) {
+  res.set({
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'",
+    'Referrer-Policy': 'no-referrer',
+    'Cache-Control': 'no-store',
+  });
+  next();
+}
 
 /**
  * Builds the Express application.
@@ -15,7 +39,8 @@ export function createApp({ config, services = {} } = {}) {
   const app = express();
 
   app.disable('x-powered-by');
-  app.use(express.json());
+  app.use(securityHeaders);
+  app.use(express.json({ limit: '100kb' }));
 
   app.get('/', (req, res) => {
     res.json({
@@ -25,7 +50,14 @@ export function createApp({ config, services = {} } = {}) {
       endpoints: [
         { method: 'GET', path: '/', description: 'Service information' },
         { method: 'GET', path: '/health', description: 'Liveness probe (process is up)' },
+        { method: 'GET', path: '/ready', description: 'Readiness probe (all databases reachable)' },
         { method: 'GET', path: '/version', description: 'Application version' },
+        { method: 'POST', path: '/users', description: 'Create a user (PostgreSQL)' },
+        { method: 'GET', path: '/users/:id', description: 'Read a user (PostgreSQL)' },
+        { method: 'POST', path: '/documents', description: 'Create a document (MongoDB)' },
+        { method: 'GET', path: '/documents/:id', description: 'Read a document (MongoDB)' },
+        { method: 'POST', path: '/cache/:key', description: 'Store a value (Redis)' },
+        { method: 'GET', path: '/cache/:key', description: 'Read a value (Redis)' },
       ],
     });
   });
@@ -41,6 +73,7 @@ export function createApp({ config, services = {} } = {}) {
   // Readiness: pings every dependency in parallel and answers 200 only
   // when all of them respond. Liveness (/health) deliberately does NOT
   // check dependencies — a dead database must not restart the pod.
+  // Each service bounds its own ping time, so this always answers.
   app.get('/ready', async (req, res) => {
     const entries = [
       ['postgresql', services.users],
@@ -66,25 +99,26 @@ export function createApp({ config, services = {} } = {}) {
       .json({ status: ready ? 'ready' : 'not_ready', checks });
   });
 
-  // Data endpoints (PostgreSQL / MongoDB / Redis).
-  app.use('/users', createUsersRouter(services.users));
-  app.use('/documents', createDocumentsRouter(services.documents));
-  app.use('/cache', createCacheRouter(services.cache));
+  // Data endpoints (PostgreSQL / MongoDB / Redis), behind the optional
+  // API key. Probes and service information stay unauthenticated.
+  const auth = requireApiKey(config.apiKey);
+  app.use('/users', auth, createUsersRouter(services.users));
+  app.use('/documents', auth, createDocumentsRouter(services.documents));
+  app.use('/cache', auth, createCacheRouter(services.cache));
 
   // Unknown routes → JSON 404, matching the API's response style.
   app.use((req, res) => {
     res.status(404).json({ error: 'not_found', path: req.originalUrl });
   });
 
-  // Central error handler: malformed JSON is a client error (400);
-  // anything else is logged and reported as an internal error (500).
+  // Central error handler: request-body problems are client errors
+  // (4xx); anything else is a bug — logged with its stack, answered 500.
   app.use((err, req, res, next) => {
     if (res.headersSent) return next(err);
-    if (err.type === 'entity.parse.failed') {
-      return res.status(400).json({
-        error: 'invalid_json',
-        message: 'request body is not valid JSON',
-      });
+    const status = err.status ?? err.statusCode;
+    if (Number.isInteger(status) && status >= 400 && status < 500) {
+      const [error, message] = BODY_ERROR_CODES[err.type] ?? ['bad_request', 'bad request'];
+      return res.status(status).json({ error, message });
     }
     console.error(`[error] ${req.method} ${req.originalUrl}:`, err);
     return res.status(500).json({ error: 'internal_error' });

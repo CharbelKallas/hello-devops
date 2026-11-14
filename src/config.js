@@ -24,10 +24,29 @@ function strFrom(env, name, fallback) {
   return raw === undefined || raw === '' ? fallback : raw;
 }
 
+// A shared secret shorter than this is too easy to guess.
+export const MIN_API_KEY_LENGTH = 16;
+
+function apiKeyFrom(env) {
+  // Trimmed: a Secret created from a file usually ends in a newline,
+  // which would otherwise make every client's key "wrong".
+  const key = strFrom(env, 'API_KEY', '').trim();
+  if (key !== '' && key.length < MIN_API_KEY_LENGTH) {
+    throw new Error(`API_KEY must be at least ${MIN_API_KEY_LENGTH} characters long`);
+  }
+  return key === '' ? null : key;
+}
+
 export function loadConfig(env = process.env) {
   return {
     port: intFrom(env, 'PORT', 3000, 1, 65535),
     version: strFrom(env, 'VERSION', packageJson.version),
+
+    // Optional shared secret. When set, the data endpoints (/users,
+    // /documents, /cache) require `Authorization: Bearer <API_KEY>`.
+    // When unset, they stay open (backwards compatible) and the server
+    // logs a warning at startup.
+    apiKey: apiKeyFrom(env),
 
     // PostgreSQL — relational data (users)
     postgres: {

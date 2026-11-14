@@ -1,0 +1,45 @@
+# Local development databases — `docker compose up -d`.
+#
+# Mirrors the lab's shared `databases` namespace: PostgreSQL with trust
+# authentication, MongoDB and Redis without auth. Ports are published on
+# 127.0.0.1 only, so these unauthenticated databases are never reachable
+# from the rest of the network. The app itself runs on the host
+# (`npm run dev`) and uses the defaults in .env.example.
+#
+# FOR LOCAL DEVELOPMENT ONLY — never use this configuration anywhere
+# that is reachable by other people.
+name: hello-devops
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: lab
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "127.0.0.1:${PGPORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "lab"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  mongodb:
+    image: mongo:8
+    ports:
+      - "127.0.0.1:${MONGO_PORT:-27017}:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30

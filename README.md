@@ -7,23 +7,24 @@ the application half of a two-repository GitOps setup: everything about
 deployment and promotion tooling lives in a separate infrastructure
 repository (wired up in later milestones).
 
-**Status:** complete for this milestone — application, database
-integrations, container image, Kustomize manifests, CI, and GitOps
-documentation. Everything is configuration only: nothing was committed,
-pushed, executed, or deployed (see [Later Milestones](#later-milestones-m2)).
+**Status:** application, database integrations, container image,
+Kustomize manifests, CI and GitOps documentation are in place. The
+infrastructure side (registry, Argo CD, Kargo) is not wired up yet —
+see [Later Milestones](#later-milestones-m2).
 
 ## End-to-End Architecture
 
 ```text
 ┌── hello-devops (THIS repository) ───────────────────────────────────────────── ┐
-│ src/ Express API + test/ fakes     Dockerfile (node:22-alpine, non-root)       │
+│ src/ Express API + test/           Dockerfile (node:24-alpine, non-root)       │
 │ base/ shared manifests             dev/ + staging/ Kustomize overlays          │
 │ .github/workflows/ci.yml           docs/ registry + Argo CD + Kargo notes      │
 └──────────────┬─────────────────────────────────────────────────────────────────┘
                │  git push / pull request
                ▼
-┌── GitHub Actions CI (configured here, NOT executed yet) ───────────────────────┐
-│ test:  npm install → npm run check → npm test      (PRs + pushes to master)    │
+┌── GitHub Actions CI ───────────────────────────────────────────────────────────┐
+│ test:  npm ci → npm run check → npm test           (PRs + pushes to master)    │
+│ integration: npm run test:integration vs real PostgreSQL/MongoDB/Redis         │
 │ image: docker build → push <LOCAL_REGISTRY_URL>/hello-devops:latest            │
 │        (push to master only, path-filtered — Kargo commits in                  │
 │         dev/ staging/ never retrigger it; skipped until the                    │
@@ -100,11 +101,30 @@ Service layer (src/services/)     ← SQL / documents / cache operations
 | POST | `/documents` | MongoDB | Create a document `{title, type?, body?}` → `201` |
 | GET | `/documents/:id` | MongoDB | Fetch a document by id → `200` / `404` |
 | GET | `/cache/:key` | Redis | Read a cached value → `200` / `404` (miss) |
-| POST | `/cache/:key` | Redis | Write `{value, ttl?}` (ttl in seconds) → `200` |
+| POST | `/cache/:key` | Redis | Write `{value, ttl?}` (ttl: 1 s – 1 year) → `200` |
 
-Error contract: `400` invalid input, `404` not found, `409` duplicate
-email, `503 {"error":"service_unavailable","service":…}` when a
-database is unreachable, `500` unexpected.
+Error contract: `400` invalid input, `401` missing/wrong API key (only
+when `API_KEY` is set), `404` not found, `409` duplicate email, `413`
+body over 100 kB, `415` unsupported charset,
+`503 {"error":"service_unavailable","service":…}` when a database is
+unreachable or does not answer within a few seconds, `500` for bugs
+(logged with a stack trace — never reported as a `503`).
+
+### Authentication
+
+Set `API_KEY` (at least 16 characters, e.g. `openssl rand -hex 32`) to
+require `Authorization: Bearer <API_KEY>` on `/users`, `/documents` and
+`/cache`. `/`, `/health`, `/ready` and `/version` stay open for probes.
+Without `API_KEY` the data endpoints are **open to anyone who can reach
+the service** (the server logs a warning at startup) — set it in every
+environment that is not fully trusted.
+
+```sh
+curl -H "Authorization: Bearer $API_KEY" http://localhost:3000/users/1
+```
+
+Cache keys are stored in Redis under the `hello-devops:cache:` prefix,
+so the API can never read or overwrite other applications' keys.
 
 ## Database Responsibilities
 
@@ -134,21 +154,25 @@ development.
 | `PGDATABASE` | `lab` | PostgreSQL database name |
 | `PGUSER` | `postgres` | PostgreSQL user |
 | `PGPASSWORD` | *(empty)* | PostgreSQL password — only needed if the server does not use `trust` auth |
+| `API_KEY` | *(unset)* | Shared secret for the data endpoints (min. 16 chars); unset = no authentication |
 | `MONGODB_URI` | `mongodb://localhost:27017/hello-devops` | Full MongoDB connection URI (host, port, database) |
 | `REDIS_HOST` | `localhost` | Redis host |
 | `REDIS_PORT` | `6379` | Redis port |
 
 ## Local Development
 
-Requirements: Node.js 20+ (developed against Node 22 — see
-[.nvmrc](.nvmrc)).
+Requirements: Node.js 22.12+ (developed against Node 24 LTS — see
+[.nvmrc](.nvmrc)) and Docker for the local databases.
 
 ```sh
-cp .env.example .env    # adjust if your databases differ
-npm install             # install dependencies
-npm test                # automated tests — no database needed
-npm start               # run the API on port 3000
-npm run dev             # run with automatic restart on file changes
+cp .env.example .env      # optional; loaded by npm start / npm run dev
+npm ci                    # install exactly the locked dependencies
+npm test                  # unit tests — no database needed
+npm run db:up             # PostgreSQL, MongoDB, Redis via compose.yaml (127.0.0.1 only)
+npm run test:integration  # the app against the real databases
+npm start                 # run the API on port 3000
+npm run dev               # run with automatic restart on file changes
+npm run db:down           # stop the databases
 ```
 
 The API starts and serves `/`, `/health` and `/version` even when no
@@ -166,9 +190,10 @@ curl -X POST http://localhost:3000/users \
 
 ## Container Image
 
-The [Dockerfile](Dockerfile) is a two-stage build on `node:22-alpine`:
+The [Dockerfile](Dockerfile) is a two-stage build on `node:24-alpine`:
 
-1. **deps** — `npm install --omit=dev` for production dependencies only;
+1. **deps** — `npm ci --omit=dev` installs exactly the locked production
+   dependencies;
 2. **runtime** — copies `package.json`, `src/` and the installed
    `node_modules`, then runs as the unprivileged `node` user and
    exposes port `3000`.
@@ -180,9 +205,6 @@ Design notes:
   duplicate that logic.
 - **No credentials in the image** — all configuration arrives at
   runtime through environment variables (`PORT`, `PGHOST`, …).
-- **`npm install`, not `npm ci`** — this repository has no
-  `package-lock.json` yet. Generating and committing one is a
-  follow-up so image builds and CI become reproducible.
 
 Build and run locally (when Docker is available):
 
@@ -223,11 +245,12 @@ Key properties:
 
 - **Configuration is environment variables only.** Non-sensitive values
   (hostnames, ports, database name) live in the `ConfigMap`; the
-  password belongs in a `Secret` that is *never committed* —
-  `base/secret.example.yaml` documents the shape and is deliberately
-  excluded from `kustomization.yaml`. The Deployment mounts it as
-  `optional: true`, so pods start before the Secret exists (the lab's
-  PostgreSQL uses `trust` auth).
+  password and the `API_KEY` belong in a `Secret` that is *never
+  committed* — `base/secret.example.yaml` documents the shape and is
+  deliberately excluded from `kustomization.yaml`. The Deployment
+  mounts both keys as `optional: true`, so pods start before the Secret
+  exists (the lab's PostgreSQL uses `trust` auth) — but without
+  `API_KEY` the data endpoints are unauthenticated.
 - **No databases are created here.** The `ConfigMap` only points at the
   services the infrastructure repository runs in the shared
   `databases` namespace (`postgres.databases.svc.cluster.local`, …).
@@ -249,8 +272,9 @@ requests** and on **pushes to `master`** (path-filtered):
 
 | Job | When | What |
 |-----|------|------|
-| `test` | always (on triggered runs) | `npm install` → `npm run check` (static module import) → `npm test` |
-| `image` | only `push` to `master`, and only once `LOCAL_REGISTRY_URL` is set as a repository variable | `docker build` → optional registry login → `docker push …/hello-devops:latest` |
+| `test` | always (on triggered runs) | `npm ci` → `npm run check` (static module import) → `npm test` |
+| `integration` | always (on triggered runs) | PostgreSQL, MongoDB and Redis service containers → `npm run test:integration` |
+| `image` | only `push` to `master` after both test jobs pass, and only once `LOCAL_REGISTRY_URL` is set as a repository variable | `docker build` → optional registry login → `docker push …/hello-devops:latest` |
 
 Properties worth knowing:
 
@@ -264,32 +288,40 @@ Properties worth knowing:
   committed. Until the variable is set, the `image` job is skipped and
   CI still validates the code.
 - **Path filtering prevents build loops:** the workflow only triggers
-  on `src/**`, `test/**`, `scripts/**`, `package.json`, `Dockerfile`,
+  on `src/**`, `test/**`, `scripts/**`, `package.json`,
+  `package-lock.json`, `Dockerfile`,
   `.dockerignore`, and the workflow file itself. Kargo's promotion
   commits touch `dev/` / `staging/` only, so they never retrigger CI.
-- **`npm install`, not `npm ci`** — there is no `package-lock.json`
-  yet (also why the workflow has no npm cache). Committing a lockfile
-  is on the follow-up list.
-- The workflow is **configuration only — it has not been executed**;
-  it will first run when the repository is pushed to GitHub.
+- **Reproducible installs:** `npm ci` from the committed
+  `package-lock.json`, with the npm cache enabled.
 
 Registry details (placeholder `<LOCAL_REGISTRY_URL>`, GitHub variables
 and secrets, reachability caveat) are documented in
 [docs/container-registry.md](docs/container-registry.md).
 
 `npm run check` (see [scripts/check.js](scripts/check.js)) imports every
-source module without starting the server — the test suite uses fakes
-and never loads `src/services/*`, so this closes that gap.
+source module without starting the server — a fast syntax and
+dependency check before the slower jobs.
 
 ## Testing
 
 Tests use the built-in Node.js test runner (`node:test`) plus
-`supertest`, with in-memory fakes injected for all three databases —
-so the suite is fast, deterministic, and runs without any external
-dependency:
+`supertest`, in two layers:
+
+- **Unit tests** (`npm test`, `test/*.test.js`) inject in-memory fakes
+  for all three databases — fast, deterministic, no external
+  dependency. They cover validation, status codes, authentication,
+  security headers and outage handling.
+- **Integration tests** (`npm run test:integration`,
+  `test/integration/`) run the real services against real PostgreSQL,
+  MongoDB and Redis (`npm run db:up` locally, service containers in
+  CI): the main create/read flows, duplicate detection, TTL expiry,
+  key namespacing, outages answering `503` without hanging, and
+  recovery after a database restart.
 
 ```sh
 npm test
+npm run db:up && npm run test:integration
 ```
 
 ## Project Structure
@@ -298,8 +330,10 @@ npm test
 hello-devops/
 ├── package.json            # dependencies and scripts
 ├── .env.example            # documented environment variables
-├── .nvmrc                  # Node.js version (22)
-├── Dockerfile              # two-stage production image (node:22-alpine)
+├── package-lock.json       # locked dependency tree (npm ci)
+├── .nvmrc                  # Node.js version (24)
+├── compose.yaml            # local PostgreSQL / MongoDB / Redis (dev only)
+├── Dockerfile              # two-stage production image (node:24-alpine)
 ├── .dockerignore           # keeps the build context lean
 ├── .github/workflows/ci.yml # CI: test always, push :latest on master
 ├── base/                   # shared K8s manifests (see above)
@@ -310,10 +344,11 @@ hello-devops/
 ├── docs/                   # registry / Argo CD / Kargo (application side)
 ├── src/
 │   ├── app.js              # Express app factory: core routes, /ready, mounts, 404, errors
+│   ├── auth.js             # optional API-key (Bearer) authentication
 │   ├── config.js           # environment-variable configuration
 │   ├── server.js           # entry point: config → services → listen → graceful shutdown
-│   ├── errors.js           # HTTP-aware error types (400/404/409)
-│   ├── http.js             # withService(): async error → 503 mapping
+│   ├── errors.js           # HTTP-aware error types (400/404/409/503), deadlines
+│   ├── http.js             # withService(): error type → HTTP response
 │   ├── routes/
 │   │   ├── users.js        # /users      (PostgreSQL)
 │   │   ├── documents.js    # /documents  (MongoDB)
@@ -321,25 +356,25 @@ hello-devops/
 │   └── services/
 │       ├── index.js        # wires the three services from config
 │       ├── postgres.js     # pg Pool, users table, lazy schema
-│       ├── mongo.js        # MongoClient, documents collection
-│       └── redis.js        # node-redis client, lazy connect + retry
+│       ├── mongo.js        # MongoClient, documents collection, reconnect after failed start
+│       └── redis.js        # node-redis client, fail-fast while offline, key prefix
 └── test/
-    ├── helpers/fakes.js    # in-memory fakes for all three services
-    ├── app.test.js         # core endpoints + /ready
+    ├── helpers/fakes.js    # in-memory fakes (+ outage / bug simulators)
+    ├── app.test.js         # core endpoints, /ready, body errors, headers
+    ├── auth.test.js        # optional API key
     ├── config.test.js      # configuration tests
+    ├── errors.test.js      # error helpers and deadlines
     ├── users.test.js       # /users endpoints
     ├── documents.test.js   # /documents endpoints
-    └── cache.test.js       # /cache endpoints
+    ├── cache.test.js       # /cache endpoints
+    └── integration/        # real databases: main flows, outages, recovery
 ```
 
 ## Later Milestones (M2)
 
 Deliberately not done in this milestone:
 
-1. **`package-lock.json`** — generate (`npm install` on a machine with
-   Node) and commit it, then switch CI and the Dockerfile to
-   `npm ci` and enable the npm cache in Actions (reproducible builds).
-2. **Replace the remaining placeholder `<LOCAL_REGISTRY_URL>` in both
+1. **Replace the remaining placeholder `<LOCAL_REGISTRY_URL>` in both
    repositories, together** — in `base/deployment.yaml`,
    `dev/kustomization.yaml`, `staging/kustomization.yaml` here, and in
    `local-server`'s `warehouse.yaml`, `stage-dev.yaml`,
@@ -347,20 +382,21 @@ Deliberately not done in this milestone:
    resolved everywhere:
    `https://github.com/CharbelKallas/hello-devops.git`, branch
    `master`.)
-3. **Configure GitHub Actions** (repository Settings → Secrets and
+2. **Configure GitHub Actions** (repository Settings → Secrets and
    variables): `LOCAL_REGISTRY_URL` (+ optional
    `LOCAL_REGISTRY_USERNAME` / `LOCAL_REGISTRY_PASSWORD`) and decide
    the reachability/runner question in
    [docs/container-registry.md](docs/container-registry.md).
-4. **Push these changes to `master`** — the branch triggers in `ci.yml`
+3. **Push these changes to `master`** — the branch triggers in `ci.yml`
    now match the default branch, so this starts the first CI run; until
-   steps 2–3 are done the `image` job stays skipped by design.
-5. **Infrastructure side:** start the local registry, apply the Kargo
-   and Argo CD manifests, create `hello-devops-secret` only if
-   PostgreSQL ever needs a password (see `base/secret.example.yaml`).
-6. **First promotion:** dev → staging in the Kargo UI; verify sync and
+   steps 1–2 are done the `image` job stays skipped by design.
+4. **Infrastructure side:** start the local registry, apply the Kargo
+   and Argo CD manifests, and create `hello-devops-secret` with an
+   `API_KEY` in each namespace (plus `PGPASSWORD` if PostgreSQL ever
+   needs one — see `base/secret.example.yaml`).
+5. **First promotion:** dev → staging in the Kargo UI; verify sync and
    probes.
-7. Optional hardening: linter (e.g. ESLint), a CI job validating the
+6. Optional hardening: linter (e.g. ESLint), a CI job validating the
    Kustomize overlays (`kustomize build dev` / `staging`), image
    digest pinning for the base image.
 
@@ -371,6 +407,8 @@ Deliberately not done in this milestone:
 - **Configuration via environment** — no credentials or hostnames in
   the code; `.env` is gitignored.
 - **Testable by construction** — `createApp()` takes injected
-  services, so tests never need real databases.
+  services, so unit tests never need real databases; integration tests
+  cover the real ones.
 - **Fail visibly** — a down database yields `503` on the affected
-  routes and `not_ready` on `/ready`, never a hang.
+  routes and `not_ready` on `/ready` within a few seconds, never a
+  hang, and the app recovers by itself when the database returns.

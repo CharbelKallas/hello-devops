@@ -53,6 +53,14 @@ spec:
                   name: hello-devops-secret
                   key: PGPASSWORD
                   optional: true
+            # Optional shared secret protecting /users, /documents and
+            # /cache (Authorization: Bearer <API_KEY>). Unset = open API.
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hello-devops-secret
+                  key: API_KEY
+                  optional: true
           # Readiness gates Service traffic: 200 only when PostgreSQL,
           # MongoDB AND Redis respond (/ready); 503 while a database is
           # down — the pod then receives no new requests.
@@ -62,6 +70,9 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
+            # A database check can take up to ~3 s when it is down; the
+            # default 1 s timeout would report "timed out" instead.
+            timeoutSeconds: 5
             failureThreshold: 3
           # Liveness only checks that the process answers — a down
           # database must NOT restart the pod (that is /ready's job).
@@ -71,6 +82,7 @@ spec:
               port: http
             initialDelaySeconds: 10
             periodSeconds: 20
+            timeoutSeconds: 3
             failureThreshold: 3
           resources:
             requests:

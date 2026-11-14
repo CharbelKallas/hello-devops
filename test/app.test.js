@@ -6,6 +6,7 @@ import {
   fakeUsersService,
   fakeDocumentsService,
   fakeCacheService,
+  failingService,
 } from './helpers/fakes.js';
 
 const config = { version: '0.1.0' };
@@ -82,4 +83,49 @@ test('a malformed JSON body is rejected with 400', async () => {
     .send('{ not json');
   assert.equal(res.status, 400);
   assert.equal(res.body.error, 'invalid_json');
+});
+
+test('an oversized body is rejected with 413, not 500', async () => {
+  const app = createApp({ config, services: healthyServices() });
+  const res = await request(app)
+    .post('/cache/big')
+    .set('Content-Type', 'application/json')
+    .send(JSON.stringify({ value: 'a'.repeat(200 * 1024) }));
+  assert.equal(res.status, 413);
+  assert.equal(res.body.error, 'payload_too_large');
+});
+
+test('an unsupported charset is rejected with 415, not 500', async () => {
+  const app = createApp({ config, services: healthyServices() });
+  const res = await request(app)
+    .post('/cache/x')
+    .set('Content-Type', 'application/json; charset=latin2')
+    .send('{"value":"v"}');
+  assert.equal(res.status, 415);
+  assert.equal(res.body.error, 'unsupported_media_type');
+});
+
+test('responses carry security headers', async () => {
+  const app = createApp({ config, services: healthyServices() });
+  const res = await request(app).get('/');
+  assert.equal(res.headers['x-content-type-options'], 'nosniff');
+  assert.equal(res.headers['x-frame-options'], 'DENY');
+  assert.equal(res.headers['cache-control'], 'no-store');
+  assert.equal(res.headers['x-powered-by'], undefined);
+});
+
+test('GET /ready reports every dependency down without hanging', async () => {
+  const app = createApp({
+    config,
+    services: { users: failingService(), documents: failingService(), cache: failingService() },
+  });
+  const res = await request(app).get('/ready');
+  assert.equal(res.status, 503);
+  assert.deepEqual(res.body.checks, { postgresql: 'down', mongodb: 'down', redis: 'down' });
+});
+
+test('a malformed percent-encoded path is a 400, not a 500', async () => {
+  const app = createApp({ config, services: healthyServices() });
+  const res = await request(app).get('/cache/%E0%A4%A');
+  assert.equal(res.status, 400);
 });

@@ -6,6 +6,7 @@ import {
   fakeUsersService,
   fakeDocumentsService,
   fakeCacheService,
+  failingService,
 } from './helpers/fakes.js';
 
 function buildApp() {
@@ -54,7 +55,7 @@ test('POST /cache/:key validates its input (400)', async () => {
   res = await request(app).post('/cache/key1').send({ value: '' });
   assert.equal(res.status, 400);
 
-  for (const ttl of ['abc', 0, -5, 1.5]) {
+  for (const ttl of ['abc', 0, -5, 1.5, true, [5], '', '1.5', 1e20, 365 * 24 * 3600 + 1]) {
     res = await request(app).post('/cache/key1').send({ value: 'v', ttl });
     assert.equal(res.status, 400, `ttl ${JSON.stringify(ttl)} should be rejected`);
   }
@@ -74,10 +75,28 @@ test('cache routes answer 503 when Redis is down', async () => {
     services: {
       users: fakeUsersService(),
       documents: fakeDocumentsService(),
-      cache: { async ping() { return true; }, async get() { throw new Error('down'); } },
+      cache: failingService('redis'),
     },
   });
   const res = await request(app).get('/cache/any');
   assert.equal(res.status, 503);
   assert.equal(res.body.service, 'redis');
+});
+
+test('POST /cache/:key accepts a TTL given as a string of digits', async () => {
+  const app = buildApp();
+  const res = await request(app)
+    .post('/cache/session')
+    .send({ value: 'abc', ttl: '120' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.ttl, 120);
+});
+
+test('cache keys longer than 256 characters are rejected (400)', async () => {
+  const app = buildApp();
+  const key = 'k'.repeat(257);
+  let res = await request(app).get(`/cache/${key}`);
+  assert.equal(res.status, 400);
+  res = await request(app).post(`/cache/${key}`).send({ value: 'v' });
+  assert.equal(res.status, 400);
 });

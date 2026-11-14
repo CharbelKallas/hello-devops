@@ -1,4 +1,4 @@
-import { ConflictError } from '../../src/errors.js';
+import { ConflictError, ServiceUnavailableError } from '../../src/errors.js';
 
 /**
  * In-memory fakes implementing the exact service interfaces used by
@@ -84,21 +84,21 @@ export function fakeCacheService() {
   };
 }
 
-/** A service whose dependency is unreachable — used for 503 / /ready tests. */
-export function failingService() {
-  return {
-    async ping() {
-      throw new Error('simulated outage');
-    },
-    async get() {
-      throw new Error('simulated outage');
-    },
-    async set() {
-      throw new Error('simulated outage');
-    },
-    async create() {
-      throw new Error('simulated outage');
-    },
-    async close() {},
+/**
+ * A service whose data store is unreachable: every operation fails the
+ * way the real services do during an outage (ServiceUnavailableError).
+ */
+export function failingService(name = 'test-db') {
+  const outage = async () => {
+    throw new ServiceUnavailableError(name, new Error('simulated outage'));
   };
+  return { ping: outage, get: outage, set: outage, create: outage, async close() {} };
+}
+
+/** A service with a programming error: methods throw a TypeError. */
+export function buggyService() {
+  const bug = async () => {
+    throw new TypeError('simulated bug');
+  };
+  return { async ping() { return true; }, get: bug, set: bug, create: bug, async close() {} };
 }

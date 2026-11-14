@@ -6,6 +6,8 @@ import {
   fakeUsersService,
   fakeDocumentsService,
   fakeCacheService,
+  failingService,
+  buggyService,
 } from './helpers/fakes.js';
 
 function buildApp() {
@@ -87,11 +89,33 @@ test('GET /users/:id rejects a non-numeric id (400)', async () => {
   assert.equal(res.status, 400);
 });
 
-test('routes answer 503 when the dependency is down', async () => {
+test('GET /users/:id accepts only plain decimal ids', async () => {
+  const app = buildApp();
+  for (const id of ['1e0', '0x1', '01', '-1', '0', '1.5']) {
+    const res = await request(app).get(`/users/${id}`);
+    assert.equal(res.status, 400, `id ${id} should be rejected`);
+  }
+});
+
+test('GET /users/:id beyond the integer column range is a 404, not a 503', async () => {
+  const app = buildApp();
+  const res = await request(app).get('/users/99999999999');
+  assert.equal(res.status, 404);
+});
+
+test('POST /users rejects an over-long email (400)', async () => {
+  const app = buildApp();
+  const res = await request(app)
+    .post('/users')
+    .send({ name: 'X', email: `${'a'.repeat(250)}@example.com` });
+  assert.equal(res.status, 400);
+});
+
+test('routes answer 503 when PostgreSQL is down', async () => {
   const app = createApp({
     config: { version: '0.1.0' },
     services: {
-      users: { async ping() { return true; } },
+      users: failingService('postgresql'),
       documents: fakeDocumentsService(),
       cache: fakeCacheService(),
     },
@@ -102,4 +126,29 @@ test('routes answer 503 when the dependency is down', async () => {
   assert.equal(res.status, 503);
   assert.equal(res.body.error, 'service_unavailable');
   assert.equal(res.body.service, 'postgresql');
+  assert.equal(res.body.message, undefined, 'internal cause must not leak');
+});
+
+test('a programming error is a 500, not disguised as a 503 outage', async () => {
+  const app = createApp({
+    config: { version: '0.1.0' },
+    services: {
+      users: buggyService(),
+      documents: fakeDocumentsService(),
+      cache: fakeCacheService(),
+    },
+  });
+  const res = await request(app)
+    .post('/users')
+    .send({ name: 'X', email: 'x@example.com' });
+  assert.equal(res.status, 500);
+  assert.equal(res.body.error, 'internal_error');
+});
+
+test('POST /users rejects NUL characters (400), which PostgreSQL cannot store', async () => {
+  const app = buildApp();
+  let res = await request(app).post('/users').send({ name: 'a\u0000b', email: 'nul@example.com' });
+  assert.equal(res.status, 400);
+  res = await request(app).post('/users').send({ name: 'ok', email: 'n\u0000ul@example.com' });
+  assert.equal(res.status, 400);
 });
