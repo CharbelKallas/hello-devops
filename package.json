@@ -12,7 +12,7 @@
     "dev": "node --env-file-if-exists=.env --watch src/server.js",
     "check": "node scripts/check.js",
     "test": "node --test test/*.test.js",
-    "test:integration": "node --test --test-concurrency=1 test/integration/*.test.js",
+    "test:integration": "node --env-file-if-exists=.env --test --test-concurrency=1 test/integration/*.test.js",
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down"
   },

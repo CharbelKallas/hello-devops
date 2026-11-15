@@ -165,7 +165,7 @@ Requirements: Node.js 22.12+ (developed against Node 24 LTS — see
 [.nvmrc](.nvmrc)) and Docker for the local databases.
 
 ```sh
-cp .env.example .env      # optional; loaded by npm start / npm run dev
+cp .env.example .env      # optional; read by npm start, npm run dev and test:integration
 npm ci                    # install exactly the locked dependencies
 npm test                  # unit tests — no database needed
 npm run db:up             # PostgreSQL, MongoDB, Redis via compose.yaml (127.0.0.1 only)
