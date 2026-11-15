@@ -324,6 +324,11 @@ npm test
 npm run db:up && npm run test:integration
 ```
 
+The integration tests create and drop throwaway `hd_*` databases and a
+role, so they need a PostgreSQL user with `CREATEDB` and `CREATEROLE`
+(the `postgres` user from `compose.yaml` and CI has both). Run them only
+against a disposable database server, never a shared one.
+
 ## Project Structure
 
 ```text

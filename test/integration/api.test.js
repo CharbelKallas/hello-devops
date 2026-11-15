@@ -7,6 +7,13 @@
  * Connection settings come from the same environment variables as the
  * app (defaults match compose.yaml). CI runs these against service
  * containers.
+ *
+ * PRIVILEGES: several tests create and drop throwaway databases
+ * (hd_race_*, hd_drop_*, hd_priv_*) and a role (hd_noperm_*), and
+ * terminate their OWN connections — so PGUSER needs CREATEDB and
+ * CREATEROLE (the compose / CI `postgres` superuser has both). Run them
+ * only against a disposable database server; if a run is killed
+ * mid-test, drop any leftover hd_* databases and roles by hand.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';

@@ -55,3 +55,11 @@ test('GET /ready answers 503 (not hang) with every dependency down', async () =>
   assert.deepEqual(res.body.checks, { postgresql: 'down', mongodb: 'down', redis: 'down' });
   assert.ok(ms < 7000, `/ready took ${ms} ms`);
 });
+
+test('regression: Redis down since startup fails fast after the first connect window', async () => {
+  // The connect window opened with the first Redis request above has
+  // passed, so later requests must not each wait for it again.
+  const { res, ms } = await timed(request(app).get('/cache/again'));
+  assert.equal(res.status, 503);
+  assert.ok(ms < 500, `took ${ms} ms`);
+});

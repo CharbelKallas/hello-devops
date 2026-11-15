@@ -6,8 +6,6 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_EMAIL_LENGTH = 254; // RFC 5321 limit
 // PostgreSQL TEXT cannot store U+0000, and no name or email needs it.
 const NUL = '\u0000';
-// users.id is a PostgreSQL SERIAL (int4): larger ids cannot exist.
-const MAX_USER_ID = 2_147_483_647;
 
 /**
  * /users — relational data stored in PostgreSQL.
@@ -48,8 +46,7 @@ export function createUsersRouter(users) {
       if (!/^[1-9][0-9]*$/.test(req.params.id)) {
         throw new BadRequestError('id must be a positive integer');
       }
-      const id = Number(req.params.id);
-      const user = id <= MAX_USER_ID ? await users.get(id) : null;
+      const user = await users.get(Number(req.params.id));
       if (!user) throw new NotFoundError(`user ${req.params.id} not found`);
       return res.status(200).json(user);
     })

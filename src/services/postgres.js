@@ -13,6 +13,9 @@ const BUG_SQLSTATE_CLASSES = new Set(['22', '23', '42']);
 // configuration problem, reported as the database being unavailable.
 const INSUFFICIENT_PRIVILEGE = '42501';
 const UNDEFINED_TABLE = '42P01';
+// users.id is a SERIAL (int4): larger ids cannot exist, and passing one
+// to PostgreSQL would fail with "out of range for type integer".
+const MAX_USER_ID = 2_147_483_647;
 
 function isBug(err) {
   return (
@@ -96,16 +99,18 @@ export function createPostgresUsers({
       // unique_violation on PostgreSQL's own catalog (23505) or
       // duplicate_table (42P07) — both mean "another replica just
       // created it", not a duplicate user.
-      schema = pool
+      const attempt = pool
         .query(CREATE_USERS_TABLE)
         .catch((err) => {
           if (err.code === '23505' || err.code === '42P07') return;
           throw isBug(err) ? err : new ServiceUnavailableError(SERVICE, err);
         })
         .catch((err) => {
-          schema = null;
+          // Forget only THIS attempt: a newer one may have replaced it.
+          if (schema === attempt) schema = null;
           throw err;
         });
+      schema = attempt;
     }
     return schema;
   }
@@ -144,6 +149,7 @@ export function createPostgresUsers({
     },
 
     async get(id) {
+      if (id > MAX_USER_ID) return null;
       const { rows } = await usersQuery(
         'SELECT id, name, email, created_at FROM users WHERE id = $1',
         [id]

@@ -78,3 +78,16 @@ export function withDeadline(service, promise, ms) {
   });
   return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
 }
+
+/**
+ * Runs one data-store operation under a deadline. Whatever goes wrong —
+ * driver error, timeout, lost connection — is reported as the store
+ * being unavailable (ServiceUnavailableError), exactly once.
+ */
+export async function callService(service, operation, ms) {
+  try {
+    return await withDeadline(service, Promise.resolve().then(operation), ms);
+  } catch (err) {
+    throw err instanceof ServiceUnavailableError ? err : new ServiceUnavailableError(service, err);
+  }
+}

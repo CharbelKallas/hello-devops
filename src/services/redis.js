@@ -1,5 +1,5 @@
 import { createClient } from 'redis';
-import { ServiceUnavailableError, describeError, withDeadline } from '../errors.js';
+import { ServiceUnavailableError, callService, describeError, withDeadline } from '../errors.js';
 
 const SERVICE = 'redis';
 const CONNECT_TIMEOUT_MS = 3000;
@@ -48,6 +48,7 @@ export function createRedisCache({ host, port }) {
   });
 
   let connecting = null;
+  let connectStartedAt = 0;
   let closed = false;
 
   async function command(fn) {
@@ -55,21 +56,21 @@ export function createRedisCache({ host, port }) {
     if (!connecting) {
       // connect() resolves once the first connection succeeds; with the
       // reconnect strategy above it keeps retrying in the background.
+      // While Redis stays unreachable it never resolves.
+      connectStartedAt = Date.now();
       connecting = client.connect().catch((err) => {
         if (!closed) console.warn(`[${SERVICE}] connect failed: ${describeError(err)}`);
       });
     }
-    if (!client.isReady) {
-      // Give a fresh connection a brief chance to come up; afterwards
-      // fail fast instead of waiting for Redis.
-      await withDeadline(SERVICE, connecting, CONNECT_TIMEOUT_MS).catch(() => {});
+    // Give a FRESH connection attempt up to CONNECT_TIMEOUT_MS to come
+    // up (so the first requests after startup don't fail needlessly).
+    // Once that window has passed, fail fast: requests must not each
+    // wait again while Redis has been down since startup.
+    const remaining = CONNECT_TIMEOUT_MS - (Date.now() - connectStartedAt);
+    if (!client.isReady && remaining > 0) {
+      await withDeadline(SERVICE, connecting, remaining).catch(() => {});
     }
-    try {
-      return await withDeadline(SERVICE, fn(), COMMAND_TIMEOUT_MS);
-    } catch (err) {
-      if (err instanceof ServiceUnavailableError) throw err;
-      throw new ServiceUnavailableError(SERVICE, err);
-    }
+    return callService(SERVICE, fn, COMMAND_TIMEOUT_MS);
   }
 
   return {

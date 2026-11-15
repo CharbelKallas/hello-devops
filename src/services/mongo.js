@@ -1,5 +1,5 @@
 import { MongoClient, ObjectId } from 'mongodb';
-import { ServiceUnavailableError, withDeadline } from '../errors.js';
+import { callService } from '../errors.js';
 
 const SERVICE = 'mongodb';
 const OPERATION_TIMEOUT_MS = 5000;
@@ -35,17 +35,12 @@ export function createMongoDocuments({ uri }) {
     return connecting;
   }
 
-  async function run(operation) {
-    try {
-      return await withDeadline(
-        SERVICE,
-        connect().then((client) => operation(client.db())),
-        OPERATION_TIMEOUT_MS
-      );
-    } catch (err) {
-      if (err instanceof ServiceUnavailableError) throw err;
-      throw new ServiceUnavailableError(SERVICE, err);
-    }
+  function run(operation) {
+    return callService(
+      SERVICE,
+      () => connect().then((client) => operation(client.db())),
+      OPERATION_TIMEOUT_MS
+    );
   }
 
   function toApi(doc) {
