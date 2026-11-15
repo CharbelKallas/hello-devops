@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { withService } from '../http.js';
+import { BadRequestError, NotFoundError } from '../errors.js';
 
 const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;
 
@@ -16,19 +17,13 @@ export function createDocumentsRouter(documents) {
     withService('mongodb', async (req, res) => {
       const { type, title, body } = req.body ?? {};
       if (typeof title !== 'string' || title.trim() === '') {
-        return res
-          .status(400)
-          .json({ error: 'bad_request', message: 'title is required' });
+        throw new BadRequestError('title is required');
       }
       if (type !== undefined && typeof type !== 'string') {
-        return res
-          .status(400)
-          .json({ error: 'bad_request', message: 'type must be a string' });
+        throw new BadRequestError('type must be a string');
       }
       if (body !== undefined && typeof body !== 'string') {
-        return res
-          .status(400)
-          .json({ error: 'bad_request', message: 'body must be a string' });
+        throw new BadRequestError('body must be a string');
       }
       const doc = await documents.create({
         type: typeof type === 'string' && type.trim() !== '' ? type.trim() : 'note',
@@ -44,17 +39,10 @@ export function createDocumentsRouter(documents) {
     withService('mongodb', async (req, res) => {
       const { id } = req.params;
       if (!OBJECT_ID_PATTERN.test(id)) {
-        return res.status(400).json({
-          error: 'bad_request',
-          message: 'id must be a 24-character hexadecimal MongoDB ObjectId',
-        });
+        throw new BadRequestError('id must be a 24-character hexadecimal MongoDB ObjectId');
       }
       const doc = await documents.get(id);
-      if (!doc) {
-        return res
-          .status(404)
-          .json({ error: 'not_found', message: `document ${id} not found` });
-      }
+      if (!doc) throw new NotFoundError(`document ${id} not found`);
       return res.status(200).json(doc);
     })
   );

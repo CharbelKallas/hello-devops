@@ -23,6 +23,7 @@ dev
 staging
 .nvmrc
 README.md
+compose.yaml
 Dockerfile
 .dockerignore
 *.log

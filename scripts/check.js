@@ -13,6 +13,7 @@ const modules = [
   '../src/config.js',
   '../src/errors.js',
   '../src/http.js',
+  '../src/auth.js',
   '../src/app.js',
   '../src/routes/users.js',
   '../src/routes/documents.js',
