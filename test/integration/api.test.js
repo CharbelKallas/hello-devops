@@ -29,22 +29,36 @@ import { KEY_PREFIX } from '../../src/services/redis.js';
 import { createMongoDocuments } from '../../src/services/mongo.js';
 import { createPostgresUsers } from '../../src/services/postgres.js';
 
-const config = loadConfig();
+// Always run with authentication ON and a known key, whatever API_KEY
+// the developer's .env holds: the tests send it on every request.
+const API_KEY = 'integration-test-key-0123456789';
+const config = loadConfig({ ...process.env, API_KEY });
 const services = createServices(config);
 const app = createApp({ config, services });
+const authorization = `Bearer ${API_KEY}`;
+const api = {
+  get: (path) => request(app).get(path).set('Authorization', authorization),
+  post: (path) => request(app).post(path).set('Authorization', authorization),
+};
 const run = randomUUID().slice(0, 8); // keeps data from separate runs apart
 
 test.after(() => services.close());
 
+test('data endpoints reject requests without the API key (401)', async () => {
+  const res = await request(app).get('/users/1');
+  assert.equal(res.status, 401);
+  assert.equal(res.body.error, 'unauthorized');
+});
+
 test('GET /ready reports every real dependency up', async () => {
-  const res = await request(app).get('/ready');
+  const res = await api.get('/ready');
   assert.equal(res.status, 200, JSON.stringify(res.body));
   assert.deepEqual(res.body.checks, { postgresql: 'up', mongodb: 'up', redis: 'up' });
 });
 
 test('users: create, read back, reject duplicates, 404 on unknown', async () => {
   const email = `ada-${run}@example.com`;
-  const created = await request(app)
+  const created = await api
     .post('/users')
     .send({ name: ' Ada Lovelace ', email: email.toUpperCase() });
   assert.equal(created.status, 201, JSON.stringify(created.body));
@@ -53,38 +67,38 @@ test('users: create, read back, reject duplicates, 404 on unknown', async () => 
   assert.ok(Number.isInteger(created.body.id));
   assert.ok(!Number.isNaN(Date.parse(created.body.createdAt)));
 
-  const read = await request(app).get(`/users/${created.body.id}`);
+  const read = await api.get(`/users/${created.body.id}`);
   assert.equal(read.status, 200);
   assert.deepEqual(read.body, created.body);
 
-  const dup = await request(app).post('/users').send({ name: 'Other', email });
+  const dup = await api.post('/users').send({ name: 'Other', email });
   assert.equal(dup.status, 409);
   assert.equal(dup.body.error, 'conflict');
 
-  assert.equal((await request(app).get('/users/2147483647')).status, 404);
-  assert.equal((await request(app).get('/users/99999999999')).status, 404);
+  assert.equal((await api.get('/users/2147483647')).status, 404);
+  assert.equal((await api.get('/users/99999999999')).status, 404);
 });
 
 test('documents: create, read back, 404 on unknown id', async () => {
-  const created = await request(app)
+  const created = await api
     .post('/documents')
     .send({ type: 'note', title: `Release ${run}`, body: 'first version' });
   assert.equal(created.status, 201, JSON.stringify(created.body));
   assert.match(created.body.id, /^[0-9a-f]{24}$/);
 
-  const read = await request(app).get(`/documents/${created.body.id}`);
+  const read = await api.get(`/documents/${created.body.id}`);
   assert.equal(read.status, 200);
   assert.deepEqual(read.body, created.body);
 
-  const missing = await request(app).get('/documents/000000000000000000000000');
+  const missing = await api.get('/documents/000000000000000000000000');
   assert.equal(missing.status, 404);
 });
 
 test('cache: set, get, namespaced storage, TTL expiry', async () => {
   const key = `greeting-${run}`;
-  const set = await request(app).post(`/cache/${key}`).send({ value: 'hello' });
+  const set = await api.post(`/cache/${key}`).send({ value: 'hello' });
   assert.equal(set.status, 200);
-  const get = await request(app).get(`/cache/${key}`);
+  const get = await api.get(`/cache/${key}`);
   assert.equal(get.status, 200);
   assert.equal(get.body.value, 'hello');
 
@@ -99,11 +113,11 @@ test('cache: set, get, namespaced storage, TTL expiry', async () => {
   }
 
   const ttlKey = `short-${run}`;
-  const withTtl = await request(app).post(`/cache/${ttlKey}`).send({ value: 'x', ttl: 1 });
+  const withTtl = await api.post(`/cache/${ttlKey}`).send({ value: 'x', ttl: 1 });
   assert.equal(withTtl.status, 200);
-  assert.equal((await request(app).get(`/cache/${ttlKey}`)).status, 200);
+  assert.equal((await api.get(`/cache/${ttlKey}`)).status, 200);
   await new Promise((resolve) => setTimeout(resolve, 2100));
-  assert.equal((await request(app).get(`/cache/${ttlKey}`)).status, 404);
+  assert.equal((await api.get(`/cache/${ttlKey}`)).status, 404);
 });
 
 test('regression: PostgreSQL killing idle connections does not crash the app', async () => {
