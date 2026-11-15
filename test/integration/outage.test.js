@@ -11,6 +11,7 @@ import request from 'supertest';
 import { loadConfig } from '../../src/config.js';
 import { createApp } from '../../src/app.js';
 import { createServices } from '../../src/services/index.js';
+import { createRedisCache } from '../../src/services/redis.js';
 
 const DEAD_PORT = '9'; // "discard" port: nothing listens on it locally
 
@@ -57,9 +58,21 @@ test('GET /ready answers 503 (not hang) with every dependency down', async () =>
 });
 
 test('regression: Redis down since startup fails fast after the first connect window', async () => {
-  // The connect window opened with the first Redis request above has
-  // passed, so later requests must not each wait for it again.
-  const { res, ms } = await timed(request(app).get('/cache/again'));
-  assert.equal(res.status, 503);
-  assert.ok(ms < 500, `took ${ms} ms`);
+  // Its own client, so the result does not depend on other tests having
+  // already opened (and used up) the connect window.
+  const cache = createRedisCache({ host: '127.0.0.1', port: Number(DEAD_PORT) });
+  try {
+    let start = Date.now();
+    await assert.rejects(cache.get('k'), { statusCode: 503 });
+    const first = Date.now() - start;
+    assert.ok(first < 7000, `first request took ${first} ms`);
+
+    // The window has passed: later requests must not each wait again.
+    start = Date.now();
+    await assert.rejects(cache.get('k'), { statusCode: 503 });
+    const second = Date.now() - start;
+    assert.ok(second < 500, `second request took ${second} ms`);
+  } finally {
+    await cache.close();
+  }
 });

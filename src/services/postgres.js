@@ -118,12 +118,15 @@ export function createPostgresUsers({
   // Queries against the users table. If the table vanished after the
   // schema was ensured, forget that, recreate it and retry once.
   async function usersQuery(text, params) {
-    await ensureSchema();
+    const ensured = ensureSchema();
+    await ensured;
     try {
       return await query(text, params);
     } catch (err) {
       if (err.code !== UNDEFINED_TABLE) throw err;
-      schema = null;
+      // Forget the schema only if no other request has already started
+      // recreating it; otherwise join that attempt.
+      if (schema === ensured) schema = null;
       await ensureSchema();
       return query(text, params);
     }
